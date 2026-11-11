@@ -1,0 +1,77 @@
+{
+  "name": "SupportOps AI - Support Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support-ticket",
+        "responseMode": "responseNode"
+      },
+      "id": "1",
+      "name": "Support Ticket Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const provided = $json.headers['x-supportops-inbound-token'];\nconst expected = $env.SUPPORTOPS_INBOUND_TOKEN;\nif (!expected || !provided || provided !== expected) {\n  throw new Error('Unauthorized inbound webhook');\n}\nreturn items;"
+      },
+      "id": "5",
+      "name": "Authenticate Caller",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst bodyRaw = JSON.stringify($json.body);\nconst signature = 'sha256=' + crypto.createHmac('sha256', $env.SUPPORTOPS_WEBHOOK_SECRET).update(bodyRaw).digest('hex');\nreturn [{ json: { bodyRaw, signature, idempotencyKey: $json.headers['idempotency-key'] || $execution.id } }];"
+      },
+      "id": "2",
+      "name": "Sign Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8000/webhooks/support",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "X-API-Key", "value": "={{ $env.SUPPORTOPS_API_KEY }}"},
+            {"name": "X-Signature-256", "value": "={{ $json.signature }}"},
+            {"name": "Idempotency-Key", "value": "={{ $json.idempotencyKey }}"}
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.bodyRaw }}"
+      },
+      "id": "3",
+      "name": "Ask SupportOps AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ $json }}"},
+      "id": "4",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1100, 300]
+    }
+  ],
+  "connections": {
+    "Support Ticket Webhook": {"main": [[{"node": "Authenticate Caller", "type": "main", "index": 0}]]},
+    "Authenticate Caller": {"main": [[{"node": "Sign Request", "type": "main", "index": 0}]]},
+    "Sign Request": {"main": [[{"node": "Ask SupportOps AI", "type": "main", "index": 0}]]},
+    "Ask SupportOps AI": {"main": [[{"node": "Return Result", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"},
+  "versionId": "00000000-0000-4000-8000-000000000001"
+}
