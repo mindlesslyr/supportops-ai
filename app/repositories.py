@@ -124,13 +124,14 @@ class SQLiteRepository:
                     return WebhookClaim(lease_token=token)
             raise IdempotencyInProgressError
 
-    def complete_webhook(self, key: str, lease_token: str, response: dict) -> None:
+    def complete_webhook(self, key: str, lease_token: str, response: dict) -> bool:
         with self.connection() as c:
-            c.execute(
+            cursor = c.execute(
                 """UPDATE webhook_events SET response=?,status='completed',lease_token=NULL,lease_expires_at=NULL
                 WHERE idempotency_key=? AND status='processing' AND lease_token=?""",
                 (json.dumps(response), key, lease_token),
             )
+            return cursor.rowcount == 1
 
     def fail_webhook(self, key: str, lease_token: str) -> None:
         with self.connection() as c:

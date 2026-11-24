@@ -288,9 +288,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 confidence=result.confidence,
                 human_review=review,
             )
-            repository.complete_webhook(
+            committed = repository.complete_webhook(
                 idempotency_key, claim.lease_token, response.model_dump()
             )
+            if not committed:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "stale_webhook_lease",
+                        "message": "Webhook processing lease expired; retry the request",
+                    },
+                )
             return response
         except Exception:
             repository.fail_webhook(idempotency_key, claim.lease_token)

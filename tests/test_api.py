@@ -235,6 +235,23 @@ def test_failed_webhook_can_be_retried(client, monkeypatch):
     assert attempts == 2
 
 
+def test_stale_webhook_worker_cannot_return_uncommitted_response(client, monkeypatch):
+    monkeypatch.setattr(
+        client.app.state.repository,
+        "complete_webhook",
+        lambda *args, **kwargs: False,
+    )
+
+    response = client.post(
+        "/webhooks/support",
+        json={"ticket_id": "T-stale", "message": "help"},
+        headers={**API_HEADERS, "Idempotency-Key": "stale-worker"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "stale_webhook_lease"
+
+
 def test_webhook_hmac_auth(tmp_path):
     app = create_app(
         Settings(
@@ -336,8 +353,8 @@ def test_stale_webhook_lease_is_reclaimed_without_old_worker_overwrite(tmp_path)
     assert first.lease_token is not None
     assert second.lease_token is not None
     assert first.lease_token != second.lease_token
-    repository.complete_webhook("key", first.lease_token, {"status": "old"})
-    repository.complete_webhook("key", second.lease_token, {"status": "new"})
+    assert repository.complete_webhook("key", first.lease_token, {"status": "old"}) is False
+    assert repository.complete_webhook("key", second.lease_token, {"status": "new"}) is True
     replay = repository.begin_webhook("key", "T", "digest", 30)
     assert replay.response == {"status": "new"}
 
