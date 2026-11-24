@@ -9,9 +9,19 @@ services:
       DATABASE_PATH: /app/data/supportops.db
       API_KEY: ${API_KEY:?Set API_KEY in .env}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET in .env}
+      EMBEDDING_BACKEND: ${EMBEDDING_BACKEND:-hash}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-384}
+      ANSWER_PROVIDER: ${ANSWER_PROVIDER:-context}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      MAX_REQUEST_BODY_BYTES: ${MAX_REQUEST_BODY_BYTES:-262144}
+      WEBHOOK_LEASE_SECONDS: ${WEBHOOK_LEASE_SECONDS:-60}
+      LOW_CONFIDENCE_THRESHOLD: ${LOW_CONFIDENCE_THRESHOLD:-0.20}
+      CHUNK_SIZE: ${CHUNK_SIZE:-120}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-20}
       APP_ENVIRONMENT: production
       ENABLE_API_DOCS: "false"
-    env_file: [.env]
     volumes: ["api_data:/app/data"]
     depends_on:
       qdrant:

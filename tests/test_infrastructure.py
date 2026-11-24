@@ -37,6 +37,8 @@ def test_compose_is_local_only_and_uses_readiness():
     assert services["n8n"]["image"] == "n8nio/n8n:2.47.4"
     assert services["postgres"]["image"] == "postgres:17-alpine"
     assert services["api"]["ports"] == ["127.0.0.1:8000:8000"]
+    assert "env_file" not in services["api"]
+    assert not any(name.startswith("N8N_") for name in services["api"]["environment"])
     assert services["qdrant"]["ports"] == ["127.0.0.1:6333:6333"]
     assert services["n8n"]["ports"] == ["127.0.0.1:5678:5678"]
     assert "/ready" in " ".join(services["api"]["healthcheck"]["test"])
