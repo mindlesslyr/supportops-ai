@@ -109,7 +109,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     repository = SQLiteRepository(config.database_path)
     answer_provider = (
         OpenAIAnswerProvider(
-            config.openai_api_key or "", config.openai_model, config.openai_base_url
+            config.openai_api_key or "",
+            config.openai_model,
+            config.openai_base_url,
+            config.openai_timeout_seconds,
+            config.openai_max_retries,
+            config.openai_max_output_tokens,
         )
         if config.answer_provider == AnswerProviderName.OPENAI
         else ContextAnswerProvider()

@@ -61,6 +61,7 @@ Development ports are bound only to `127.0.0.1`: API 8000, Qdrant 6333, and n8n 
 - `WEBHOOK_LEASE_SECONDS` allows abandoned idempotency claims to be reclaimed safely.
 - `EMBEDDING_BACKEND=hash|fastembed`; `EMBEDDING_DIMENSIONS` must be positive.
 - `ANSWER_PROVIDER=context|openai`; OpenAI mode fails at startup without `OPENAI_API_KEY`.
+- `OPENAI_TIMEOUT_SECONDS`, `OPENAI_MAX_RETRIES`, and `OPENAI_MAX_OUTPUT_TOKENS` bound provider latency, retry amplification, and response cost.
 - `QDRANT_URL` for server mode, otherwise embedded `QDRANT_PATH` is used.
 - `QDRANT_STARTUP_ATTEMPTS`, `QDRANT_RETRY_SECONDS`: startup retry/backoff.
 - `CHUNK_SIZE`, `CHUNK_OVERLAP`: positive size and overlap smaller than size.

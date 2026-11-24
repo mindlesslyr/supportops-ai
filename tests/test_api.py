@@ -391,6 +391,15 @@ def test_production_rejects_unsigned_webhook_bypass():
         )
 
 
+def test_openai_limits_are_validated():
+    with pytest.raises(ValidationError):
+        Settings(openai_timeout_seconds=0)
+    with pytest.raises(ValidationError):
+        Settings(openai_max_retries=-1)
+    with pytest.raises(ValidationError):
+        Settings(openai_max_output_tokens=0)
+
+
 def test_provider_settings_are_validated():
     with pytest.raises(ValidationError, match="OPENAI_API_KEY"):
         Settings(answer_provider="openai")
