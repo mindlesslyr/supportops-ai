@@ -336,6 +336,14 @@ def test_existing_qdrant_collection_mismatch_fails_clearly(tmp_path):
         VectorStore(client, "mismatch", HashEmbeddingProvider(16))
 
 
+def test_production_rejects_unsigned_webhook_bypass():
+    with pytest.raises(ValidationError, match="ALLOW_UNSIGNED_WEBHOOKS_DEV"):
+        Settings(
+            app_environment="production",
+            allow_unsigned_webhooks_dev=True,
+        )
+
+
 def test_provider_settings_are_validated():
     with pytest.raises(ValidationError, match="OPENAI_API_KEY"):
         Settings(answer_provider="openai")

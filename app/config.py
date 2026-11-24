@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     def validate_cross_fields(self) -> "Settings":
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE")
+        if self.app_environment == "production" and self.allow_unsigned_webhooks_dev:
+            raise ValueError(
+                "ALLOW_UNSIGNED_WEBHOOKS_DEV cannot be enabled in production"
+            )
         if self.answer_provider == AnswerProviderName.OPENAI and not self.openai_api_key:
             raise ValueError("OPENAI_API_KEY is required when ANSWER_PROVIDER=openai")
         return self
