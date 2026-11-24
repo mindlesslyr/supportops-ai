@@ -3,7 +3,18 @@ from pathlib import Path
 
 import yaml
 
+from app.config import AnswerProviderName
+
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_env_example_uses_supported_answer_provider():
+    values = dict(
+        line.split("=", 1)
+        for line in (ROOT / ".env.example").read_text().splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    assert values["ANSWER_PROVIDER"] in {provider.value for provider in AnswerProviderName}
 
 
 def test_n8n_workflow_authenticates_before_forwarding():
@@ -23,11 +34,16 @@ def test_compose_is_local_only_and_uses_readiness():
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
     services = compose["services"]
 
+    assert services["n8n"]["image"] == "n8nio/n8n:2.47.4"
+    assert services["postgres"]["image"] == "postgres:17-alpine"
     assert services["api"]["ports"] == ["127.0.0.1:8000:8000"]
     assert services["qdrant"]["ports"] == ["127.0.0.1:6333:6333"]
     assert services["n8n"]["ports"] == ["127.0.0.1:5678:5678"]
     assert "/ready" in " ".join(services["api"]["healthcheck"]["test"])
     assert "SUPPORTOPS_INBOUND_TOKEN" in services["n8n"]["environment"]
+    assert services["n8n"]["environment"]["NODE_FUNCTION_ALLOW_BUILTIN"] == "crypto"
+    assert services["n8n"]["environment"]["N8N_BLOCK_ENV_ACCESS_IN_NODE"] == "false"
+    assert services["n8n"]["environment"]["N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS"] == "true"
 
 
 def test_api_container_runs_as_non_root():

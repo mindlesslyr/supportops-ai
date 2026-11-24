@@ -37,7 +37,7 @@ services:
       start_period: 10s
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: n8n
@@ -51,7 +51,7 @@ services:
       retries: 10
 
   n8n:
-    image: n8nio/n8n:1.70.3
+    image: n8nio/n8n:2.47.4
     restart: unless-stopped
     ports:
       - "127.0.0.1:5678:5678"
@@ -66,6 +66,8 @@ services:
       SUPPORTOPS_WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET in .env}
       SUPPORTOPS_INBOUND_TOKEN: ${N8N_INBOUND_TOKEN:?Set N8N_INBOUND_TOKEN in .env}
       NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
       # Explicitly local HTTP only. Production behind HTTPS must set this true.
       N8N_SECURE_COOKIE: "false"
     volumes: ["n8n_data:/home/node/.n8n"]
