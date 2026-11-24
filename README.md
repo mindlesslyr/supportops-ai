@@ -46,6 +46,15 @@ docker compose config -q
 docker compose up --build
 ```
 
+After n8n starts, open `http://127.0.0.1:5678` and complete the local owner setup. Then import the versioned workflow:
+
+```bash
+docker compose exec n8n n8n import:workflow \
+  --input=/workflows/supportops-workflow.json
+```
+
+Open **SupportOps AI - Support Webhook** in n8n, review its nodes, and activate it. The public n8n webhook requires both `X-SupportOps-Inbound-Token` and `Idempotency-Key`; retries must reuse the same idempotency key.
+
 Development ports are bound only to `127.0.0.1`: API 8000, Qdrant 6333, and n8n 5678. Compose refuses to start without API, webhook, inbound n8n, database, and n8n encryption secrets. Healthchecks and dependency conditions make Qdrant/Postgres/API startup ordered. The imported `n8n/supportops-workflow.json` first requires `X-SupportOps-Inbound-Token`, then signs the exact forwarded body and sends the API key. The inbound token is independent from the API key and webhook-signing secret.
 
 `N8N_SECURE_COOKIE=false` is explicit because this development stack uses localhost HTTP. **Production must use TLS and set secure cookies true**, avoid publishing Qdrant/Postgres, place the API behind an authenticated reverse proxy/firewall, rotate high-entropy secrets, restrict n8n access, configure backups and audit logging, and apply rate/body-size limits. Do not expose this development compose file directly to the internet.

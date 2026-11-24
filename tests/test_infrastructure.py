@@ -46,6 +46,7 @@ def test_compose_is_local_only_and_uses_readiness():
     assert not any(name.startswith("N8N_") for name in services["api"]["environment"])
     assert services["qdrant"]["ports"] == ["127.0.0.1:6333:6333"]
     assert services["n8n"]["ports"] == ["127.0.0.1:5678:5678"]
+    assert "./n8n:/workflows:ro" in services["n8n"]["volumes"]
     assert "/ready" in " ".join(services["api"]["healthcheck"]["test"])
     assert "SUPPORTOPS_INBOUND_TOKEN" in services["n8n"]["environment"]
     assert services["n8n"]["environment"]["NODE_FUNCTION_ALLOW_BUILTIN"] == "crypto"
