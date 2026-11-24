@@ -21,13 +21,17 @@ uvicorn app.main:app --reload
 
 ```bash
 export SUPPORTOPS_API_KEY='the value configured in API_KEY'
-curl http://127.0.0.1:8000/health
-curl -H "X-API-Key: $SUPPORTOPS_API_KEY" http://127.0.0.1:8000/documents
-curl -X POST http://127.0.0.1:8000/documents \
-  -H "X-API-Key: $SUPPORTOPS_API_KEY" -H 'Content-Type: application/json' \
+curl --fail-with-body http://127.0.0.1:8000/health
+curl --fail-with-body \
+  -H "X-API-Key: $SUPPORTOPS_API_KEY" \
+  http://127.0.0.1:8000/documents
+curl --fail-with-body -X POST http://127.0.0.1:8000/documents \
+  -H "X-API-Key: $SUPPORTOPS_API_KEY" \
+  -H 'Content-Type: application/json' \
   -d '{"title":"Refunds","content":"Refunds are available within 30 days.","source":"kb://refunds"}'
-curl -X POST http://127.0.0.1:8000/query \
-  -H "X-API-Key: $SUPPORTOPS_API_KEY" -H 'Content-Type: application/json' \
+curl --fail-with-body -X POST http://127.0.0.1:8000/query \
+  -H "X-API-Key: $SUPPORTOPS_API_KEY" \
+  -H 'Content-Type: application/json' \
   -d '{"question":"How can I get a refund?","top_k":4}'
 ```
 
