@@ -29,6 +29,11 @@ def test_n8n_workflow_authenticates_before_forwarding():
     first_connection = workflow["connections"]["Support Ticket Webhook"]["main"][0][0]
     assert first_connection["node"] == "Authenticate Caller"
 
+    sign_code = nodes["Sign Request"]["parameters"]["jsCode"]
+    assert "idempotency-key" in sign_code
+    assert "$execution.id" not in sign_code
+    assert "Missing Idempotency-Key" in sign_code
+
 
 def test_compose_is_local_only_and_uses_readiness():
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())

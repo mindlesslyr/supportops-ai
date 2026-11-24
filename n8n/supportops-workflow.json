@@ -25,7 +25,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const crypto = require('crypto');\nconst bodyRaw = JSON.stringify($json.body);\nconst signature = 'sha256=' + crypto.createHmac('sha256', $env.SUPPORTOPS_WEBHOOK_SECRET).update(bodyRaw).digest('hex');\nreturn [{ json: { bodyRaw, signature, idempotencyKey: $json.headers['idempotency-key'] || $execution.id } }];"
+        "jsCode": "const crypto = require('crypto');\nconst idempotencyKey = $json.headers['idempotency-key'];\nif (!idempotencyKey) {\n  throw new Error('Missing Idempotency-Key header');\n}\nconst bodyRaw = JSON.stringify($json.body);\nconst signature = 'sha256=' + crypto.createHmac('sha256', $env.SUPPORTOPS_WEBHOOK_SECRET).update(bodyRaw).digest('hex');\nreturn [{ json: { bodyRaw, signature, idempotencyKey } }];"
       },
       "id": "2",
       "name": "Sign Request",
