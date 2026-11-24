@@ -42,12 +42,37 @@ class MaxBodySizeMiddleware:
             return
         headers = dict(scope.get("headers", []))
         content_length = headers.get(b"content-length")
-        if content_length and int(content_length) > self.max_bytes:
-            await JSONResponse(
-                status_code=413,
-                content={"detail": {"code": "request_too_large", "message": "Request body is too large"}},
-            )(scope, receive, send)
-            return
+        if content_length:
+            try:
+                declared_length = int(content_length)
+            except (TypeError, ValueError):
+                await JSONResponse(
+                    status_code=400,
+                    content={
+                        "detail": {
+                            "code": "invalid_content_length",
+                            "message": "Content-Length header is invalid",
+                        }
+                    },
+                )(scope, receive, send)
+                return
+            if declared_length < 0:
+                await JSONResponse(
+                    status_code=400,
+                    content={
+                        "detail": {
+                            "code": "invalid_content_length",
+                            "message": "Content-Length header is invalid",
+                        }
+                    },
+                )(scope, receive, send)
+                return
+            if declared_length > self.max_bytes:
+                await JSONResponse(
+                    status_code=413,
+                    content={"detail": {"code": "request_too_large", "message": "Request body is too large"}},
+                )(scope, receive, send)
+                return
         received = 0
 
         async def limited_receive():

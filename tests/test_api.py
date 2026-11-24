@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import json
@@ -10,7 +11,7 @@ from pydantic import ValidationError
 from qdrant_client import QdrantClient, models
 
 from app.config import Settings
-from app.main import create_app
+from app.main import MaxBodySizeMiddleware, create_app
 from app.rag.answers import ContextAnswerProvider
 from app.rag.embeddings import HashEmbeddingProvider
 from app.rag.vector_store import VectorStore, VectorStoreConfigurationError
@@ -129,6 +130,35 @@ def test_oversized_request_body_is_rejected(tmp_path):
             headers={**API_HEADERS, "Content-Type": "application/json"},
         )
     assert response.status_code == 413
+
+
+def test_malformed_content_length_returns_bad_request():
+    downstream_called = False
+    sent = []
+
+    async def downstream(scope, receive, send):
+        nonlocal downstream_called
+        downstream_called = True
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    middleware = MaxBodySizeMiddleware(downstream, max_bytes=1024)
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/documents",
+        "headers": [(b"content-length", b"invalid")],
+    }
+
+    asyncio.run(middleware(scope, receive, send))
+
+    assert not downstream_called
+    assert sent[0]["type"] == "http.response.start"
+    assert sent[0]["status"] == 400
 
 
 def test_feedback_is_persisted(client):
