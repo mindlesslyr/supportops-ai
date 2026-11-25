@@ -1,6 +1,7 @@
 # SupportOps AI
 
 A local-first support automation MVP for document ingestion, Qdrant retrieval, grounded answers, feedback, and signed idempotent support webhooks.
+(pleasee note this is still a MVP)
 
 ## Local setup
 
