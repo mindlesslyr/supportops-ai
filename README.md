@@ -48,6 +48,41 @@ rewriting the document. Without the header, every successful request creates a n
 document. Keep the key stable after client timeouts and change it only when intentionally
 ingesting a new document version.
 
+### Recovering a crashed document ingestion
+
+A document claim is deliberately not stolen on a timer because Qdrant cannot reject a
+late write from an expired worker. If the API process crashes and a key remains
+`processing`, first stop every API worker and back up the SQLite database. For the Docker
+Compose stack:
+
+```bash
+docker compose stop api
+docker compose run --rm --no-deps --entrypoint python api -c \
+  'import sqlite3; src=sqlite3.connect("/app/data/supportops.db"); dst=sqlite3.connect("/app/data/supportops.db.bak"); src.backup(dst); dst.close(); src.close()'
+```
+
+Inspect the exact claim before changing it:
+
+```bash
+docker compose run --rm --no-deps --entrypoint python \
+  -e RECOVERY_KEY='refunds-policy-v1' api -c \
+  'import os,sqlite3; c=sqlite3.connect("/app/data/supportops.db"); print(c.execute("SELECT idempotency_key,document_id,status,created_at FROM document_ingestions WHERE idempotency_key=?",(os.environ["RECOVERY_KEY"],)).fetchone())'
+```
+
+Only after confirming that no worker can still be running, transition that one claim to
+`retryable`:
+
+```bash
+docker compose run --rm --no-deps --entrypoint python \
+  -e RECOVERY_KEY='refunds-policy-v1' api -c \
+  'import os,sqlite3; c=sqlite3.connect("/app/data/supportops.db"); r=c.execute("UPDATE document_ingestions SET status=\"retryable\",lease_token=NULL WHERE idempotency_key=? AND status=\"processing\"",(os.environ["RECOVERY_KEY"],)); c.commit(); print("updated",r.rowcount,"claim")'
+docker compose start api
+```
+
+Retry the exact original payload with the same key. The service keeps the original
+document ID, removes any uncertain Qdrant points for that document, and writes a clean
+point set. Never run this recovery while an API worker may still own the claim.
+
 Webhook callers must send `X-API-Key`, `Idempotency-Key`, and `X-Signature-256: sha256=<HMAC-SHA256 of the exact raw body>`. The same idempotency key and payload replays the completed response; a changed payload returns 409; failed processing can be retried.
 
 ## Docker development stack
