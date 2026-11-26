@@ -42,9 +42,11 @@ curl --fail-with-body -X POST http://127.0.0.1:8000/query \
 version. Retrying the same key with the same validated payload returns the original
 `201` response and document ID without creating another SQLite row or Qdrant point set.
 Reusing the key with a different payload returns `409 idempotency_conflict`; a request
-that is still processing returns `409 request_in_progress`. Without the header, every
-successful request creates a new document. Keep the key stable after client timeouts and
-change it only when intentionally ingesting a new document version.
+that is still processing returns `409 request_in_progress`. Handled storage failures retain
+the original document ID, and the next retry removes any uncertain Qdrant points before
+rewriting the document. Without the header, every successful request creates a new
+document. Keep the key stable after client timeouts and change it only when intentionally
+ingesting a new document version.
 
 Webhook callers must send `X-API-Key`, `Idempotency-Key`, and `X-Signature-256: sha256=<HMAC-SHA256 of the exact raw body>`. The same idempotency key and payload replays the completed response; a changed payload returns 409; failed processing can be retried.
 
@@ -78,7 +80,6 @@ Development ports are bound only to `127.0.0.1`: API 8000, Qdrant 6333, and n8n 
 - `ALLOW_UNSIGNED_WEBHOOKS_DEV=false`: unmistakable development-only bypass.
 - `APP_ENVIRONMENT=production` disables `/docs`, `/redoc`, and `/openapi.json`; the Compose API uses this mode.
 - `MAX_REQUEST_BODY_BYTES` and schema field limits bound resource usage.
-- `INGESTION_LEASE_SECONDS` controls when an abandoned document-ingestion claim can be safely reclaimed.
 - `WEBHOOK_LEASE_SECONDS` allows abandoned webhook claims to be reclaimed safely.
 - `EMBEDDING_BACKEND=hash|fastembed`; `EMBEDDING_DIMENSIONS` must be positive.
 - `ANSWER_PROVIDER=context|openai`; OpenAI mode fails at startup without `OPENAI_API_KEY`.
@@ -106,4 +107,4 @@ Tests use temporary embedded Qdrant and SQLite and need no paid service. Treat i
 
 ## Limitations
 
-Hash embeddings are deterministic but less semantically accurate than production embeddings. Confidence is retrieval similarity, not calibrated probability. SQLite idempotency supports concurrent claims on one shared SQLite database, but a distributed production deployment should move this coordination to a server database or queue. Multi-tenancy, background ingestion, document updates/deletes, reranking, and evaluation dashboards remain out of scope.
+Hash embeddings are deterministic but less semantically accurate than production embeddings. Confidence is retrieval similarity, not calibrated probability. SQLite idempotency supports concurrent claims on one shared SQLite database, but a distributed production deployment should move this coordination to a server database or queue. Document-ingestion claims are not automatically stolen on a timer because Qdrant cannot fence a stale writer; a process crash while a claim is `processing` currently requires operator recovery. Multi-tenancy, background ingestion, document updates/deletes, reranking, and evaluation dashboards remain out of scope.

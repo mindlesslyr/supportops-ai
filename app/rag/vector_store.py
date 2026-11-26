@@ -108,6 +108,22 @@ class VectorStore:
                 wait=True,
             )
 
+    def delete_document(self, document_id: str) -> None:
+        self.client.delete(
+            collection_name=self.collection,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="document_id",
+                            match=models.MatchValue(value=document_id),
+                        )
+                    ]
+                )
+            ),
+            wait=True,
+        )
+
     def search(self, query: str, limit: int) -> list[RetrievedChunk]:
         result = self.client.query_points(
             collection_name=self.collection,

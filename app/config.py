@@ -41,7 +41,6 @@ class Settings(BaseSettings):
     app_environment: str = Field(default="development", pattern="^(development|production)$")
     enable_api_docs: bool = True
     max_request_body_bytes: int = Field(default=262_144, ge=1024, le=10_485_760)
-    ingestion_lease_seconds: float = Field(default=60, ge=0.01, le=3600)
     webhook_lease_seconds: float = Field(default=60, ge=0.01, le=3600)
     low_confidence_threshold: float = Field(default=0.20, ge=0, le=1)
     chunk_size: int = Field(default=120, ge=1, le=10000)

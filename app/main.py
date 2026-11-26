@@ -133,7 +133,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         config.chunk_size,
         config.chunk_overlap,
         config.low_confidence_threshold,
-        config.ingestion_lease_seconds,
     )
 
     @asynccontextmanager
@@ -170,7 +169,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from fastapi.responses import JSONResponse
 
         return JSONResponse(
-            status_code=500, content={"detail": {"code": exc.code, "message": str(exc)}}
+            status_code=409 if exc.code == "stale_ingestion_lease" else 500,
+            content={"detail": {"code": exc.code, "message": str(exc)}},
         )
 
     @api.get("/health")

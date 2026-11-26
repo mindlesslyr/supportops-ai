@@ -307,6 +307,25 @@ def test_stale_webhook_worker_cannot_return_uncommitted_response(client, monkeyp
     assert response.json()["detail"]["code"] == "stale_webhook_lease"
 
 
+def test_stale_ingestion_worker_returns_conflict(client, monkeypatch):
+    def stale_ingest(*args, **kwargs):
+        raise IngestionError(
+            "stale_ingestion_lease",
+            "Document ingestion lease expired; retry the request",
+        )
+
+    monkeypatch.setattr(client.app.state.service, "ingest", stale_ingest)
+
+    response = client.post(
+        "/documents",
+        json={"title": "Refunds", "content": "Refunds take five days."},
+        headers={**API_HEADERS, "Idempotency-Key": "refund-policy-v1"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "stale_ingestion_lease"
+
+
 def test_webhook_hmac_auth(tmp_path):
     app = create_app(
         Settings(
@@ -400,6 +419,31 @@ def test_idempotency_claim_is_atomic_under_concurrency(tmp_path):
     assert sum(outcome != "in_progress" for outcome in outcomes) == 1
 
 
+def test_document_ingestion_claim_is_atomic_under_concurrency(tmp_path):
+    repository = SQLiteRepository(str(tmp_path / "db.sqlite"))
+    barrier = threading.Barrier(8)
+    outcomes = []
+    errors = []
+
+    def claim():
+        try:
+            barrier.wait()
+            outcomes.append(repository.begin_document_ingestion("same", "digest"))
+        except IdempotencyInProgressError:
+            outcomes.append("in_progress")
+        except Exception as exc:  # noqa: BLE001 - collect unexpected thread failures
+            errors.append(exc)
+
+    threads = [threading.Thread(target=claim) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors
+    assert sum(outcome != "in_progress" for outcome in outcomes) == 1
+
+
 def test_stale_webhook_lease_is_reclaimed_without_old_worker_overwrite(tmp_path):
     repository = SQLiteRepository(str(tmp_path / "db.sqlite"))
     first = repository.begin_webhook("key", "T", "digest", 0.01)
@@ -414,54 +458,13 @@ def test_stale_webhook_lease_is_reclaimed_without_old_worker_overwrite(tmp_path)
     assert replay.response == {"status": "new"}
 
 
-def test_stale_ingestion_claim_reuses_document_id_without_old_worker_commit(tmp_path):
+def test_processing_ingestion_claim_is_not_reclaimed_by_time(tmp_path):
     repository = SQLiteRepository(str(tmp_path / "db.sqlite"))
-    first = repository.begin_document_ingestion("key", "digest", 0.01)
+    first = repository.begin_document_ingestion("key", "digest")
     time.sleep(0.02)
-    second = repository.begin_document_ingestion("key", "digest", 30)
-
-    assert first.document_id == second.document_id
     assert first.lease_token is not None
-    assert second.lease_token is not None
-    assert first.lease_token != second.lease_token
-
-    old_response = {
-        "id": first.document_id,
-        "title": "Old",
-        "source": "manual",
-        "metadata": {},
-        "chunk_count": 1,
-    }
-    new_response = {**old_response, "title": "Canonical"}
-    assert (
-        repository.complete_document_ingestion(
-            "key",
-            first.lease_token,
-            first.document_id,
-            "Old",
-            "manual",
-            {},
-            1,
-            old_response,
-        )
-        is False
-    )
-    assert (
-        repository.complete_document_ingestion(
-            "key",
-            second.lease_token,
-            second.document_id,
-            "Canonical",
-            "manual",
-            {},
-            1,
-            new_response,
-        )
-        is True
-    )
-    replay = repository.begin_document_ingestion("key", "digest", 30)
-    assert replay.response == new_response
-    assert repository.list_documents()[0]["title"] == "Canonical"
+    with pytest.raises(IdempotencyInProgressError):
+        repository.begin_document_ingestion("key", "digest")
 
 
 def test_production_disables_docs(tmp_path):
@@ -503,11 +506,6 @@ def test_openai_limits_are_validated():
         Settings(openai_max_retries=-1)
     with pytest.raises(ValidationError):
         Settings(openai_max_output_tokens=0)
-
-
-def test_ingestion_lease_must_be_positive():
-    with pytest.raises(ValidationError):
-        Settings(ingestion_lease_seconds=0)
 
 
 def test_provider_settings_are_validated():
