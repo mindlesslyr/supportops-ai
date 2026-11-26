@@ -78,6 +78,61 @@ def test_ingest_list_query_and_citations(client):
     assert "knowledge base" in body["answer"]
 
 
+def test_document_ingestion_replays_original_response(client):
+    payload = {
+        "title": "Refunds",
+        "content": "Refunds are available within 30 days.",
+        "source": "kb://refunds",
+    }
+    headers = {**API_HEADERS, "Idempotency-Key": "document-refunds-v1"}
+
+    first = client.post("/documents", json=payload, headers=headers)
+    second = client.post("/documents", json=payload, headers=headers)
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert second.json() == first.json()
+    assert len(client.get("/documents", headers=API_HEADERS).json()) == 1
+    assert client.app.state.service.vectors.client.count("test", exact=True).count == first.json()[
+        "chunk_count"
+    ]
+
+
+def test_document_ingestion_rejects_key_reuse_with_different_payload(client):
+    headers = {**API_HEADERS, "Idempotency-Key": "document-policy-v1"}
+    first = client.post(
+        "/documents",
+        json={"title": "Refunds", "content": "Refunds take 5 days."},
+        headers=headers,
+    )
+
+    conflict = client.post(
+        "/documents",
+        json={"title": "Refunds", "content": "Refunds take 10 days."},
+        headers=headers,
+    )
+
+    assert first.status_code == 201
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"] == {
+        "code": "idempotency_conflict",
+        "message": "Idempotency key was used with a different payload",
+    }
+    assert len(client.get("/documents", headers=API_HEADERS).json()) == 1
+
+
+def test_document_ingestion_rejects_blank_idempotency_key(client):
+    response = client.post(
+        "/documents",
+        json={"title": "Refunds", "content": "Refunds take 5 days."},
+        headers={**API_HEADERS, "Idempotency-Key": "   "},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_idempotency_key"
+    assert client.get("/documents", headers=API_HEADERS).json() == []
+
+
 def test_blank_document_and_query_are_rejected(client):
     response = client.post(
         "/documents",
@@ -359,6 +414,56 @@ def test_stale_webhook_lease_is_reclaimed_without_old_worker_overwrite(tmp_path)
     assert replay.response == {"status": "new"}
 
 
+def test_stale_ingestion_claim_reuses_document_id_without_old_worker_commit(tmp_path):
+    repository = SQLiteRepository(str(tmp_path / "db.sqlite"))
+    first = repository.begin_document_ingestion("key", "digest", 0.01)
+    time.sleep(0.02)
+    second = repository.begin_document_ingestion("key", "digest", 30)
+
+    assert first.document_id == second.document_id
+    assert first.lease_token is not None
+    assert second.lease_token is not None
+    assert first.lease_token != second.lease_token
+
+    old_response = {
+        "id": first.document_id,
+        "title": "Old",
+        "source": "manual",
+        "metadata": {},
+        "chunk_count": 1,
+    }
+    new_response = {**old_response, "title": "Canonical"}
+    assert (
+        repository.complete_document_ingestion(
+            "key",
+            first.lease_token,
+            first.document_id,
+            "Old",
+            "manual",
+            {},
+            1,
+            old_response,
+        )
+        is False
+    )
+    assert (
+        repository.complete_document_ingestion(
+            "key",
+            second.lease_token,
+            second.document_id,
+            "Canonical",
+            "manual",
+            {},
+            1,
+            new_response,
+        )
+        is True
+    )
+    replay = repository.begin_document_ingestion("key", "digest", 30)
+    assert replay.response == new_response
+    assert repository.list_documents()[0]["title"] == "Canonical"
+
+
 def test_production_disables_docs(tmp_path):
     app = create_app(
         Settings(
@@ -398,6 +503,11 @@ def test_openai_limits_are_validated():
         Settings(openai_max_retries=-1)
     with pytest.raises(ValidationError):
         Settings(openai_max_output_tokens=0)
+
+
+def test_ingestion_lease_must_be_positive():
+    with pytest.raises(ValidationError):
+        Settings(ingestion_lease_seconds=0)
 
 
 def test_provider_settings_are_validated():

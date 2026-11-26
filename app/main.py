@@ -133,6 +133,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         config.chunk_size,
         config.chunk_overlap,
         config.low_confidence_threshold,
+        config.ingestion_lease_seconds,
     )
 
     @asynccontextmanager
@@ -199,8 +200,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         status_code=status.HTTP_201_CREATED,
         dependencies=protected,
     )
-    def create_document(body: DocumentCreate):
-        return service.ingest(body)
+    def create_document(
+        body: DocumentCreate,
+        idempotency_key: str | None = Header(
+            default=None, alias="Idempotency-Key", max_length=256
+        ),
+    ):
+        if idempotency_key is not None and not idempotency_key.strip():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_idempotency_key",
+                    "message": "Idempotency-Key must not be blank",
+                },
+            )
+        try:
+            return service.ingest(body, idempotency_key)
+        except IdempotencyConflictError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "idempotency_conflict",
+                    "message": "Idempotency key was used with a different payload",
+                },
+            ) from exc
+        except IdempotencyInProgressError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_in_progress", "message": "Request is still processing"},
+            ) from exc
 
     @api.get("/documents", response_model=list[DocumentRead], dependencies=protected)
     def list_documents():
