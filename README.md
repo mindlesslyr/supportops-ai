@@ -28,6 +28,7 @@ curl --fail-with-body \
   http://127.0.0.1:8000/documents
 curl --fail-with-body -X POST http://127.0.0.1:8000/documents \
   -H "X-API-Key: $SUPPORTOPS_API_KEY" \
+  -H 'Idempotency-Key: refunds-policy-v1' \
   -H 'Content-Type: application/json' \
   -d '{"title":"Refunds","content":"Refunds are available within 30 days.","source":"kb://refunds"}'
 curl --fail-with-body -X POST http://127.0.0.1:8000/query \
@@ -35,6 +36,15 @@ curl --fail-with-body -X POST http://127.0.0.1:8000/query \
   -H 'Content-Type: application/json' \
   -d '{"question":"How can I get a refund?","top_k":4}'
 ```
+
+`Idempotency-Key` is optional for backward compatibility but strongly recommended for
+`POST /documents`. Use one non-blank key of at most 256 characters per logical document
+version. Retrying the same key with the same validated payload returns the original
+`201` response and document ID without creating another SQLite row or Qdrant point set.
+Reusing the key with a different payload returns `409 idempotency_conflict`; a request
+that is still processing returns `409 request_in_progress`. Without the header, every
+successful request creates a new document. Keep the key stable after client timeouts and
+change it only when intentionally ingesting a new document version.
 
 Webhook callers must send `X-API-Key`, `Idempotency-Key`, and `X-Signature-256: sha256=<HMAC-SHA256 of the exact raw body>`. The same idempotency key and payload replays the completed response; a changed payload returns 409; failed processing can be retried.
 
@@ -68,7 +78,8 @@ Development ports are bound only to `127.0.0.1`: API 8000, Qdrant 6333, and n8n 
 - `ALLOW_UNSIGNED_WEBHOOKS_DEV=false`: unmistakable development-only bypass.
 - `APP_ENVIRONMENT=production` disables `/docs`, `/redoc`, and `/openapi.json`; the Compose API uses this mode.
 - `MAX_REQUEST_BODY_BYTES` and schema field limits bound resource usage.
-- `WEBHOOK_LEASE_SECONDS` allows abandoned idempotency claims to be reclaimed safely.
+- `INGESTION_LEASE_SECONDS` controls when an abandoned document-ingestion claim can be safely reclaimed.
+- `WEBHOOK_LEASE_SECONDS` allows abandoned webhook claims to be reclaimed safely.
 - `EMBEDDING_BACKEND=hash|fastembed`; `EMBEDDING_DIMENSIONS` must be positive.
 - `ANSWER_PROVIDER=context|openai`; OpenAI mode fails at startup without `OPENAI_API_KEY`.
 - `OPENAI_TIMEOUT_SECONDS`, `OPENAI_MAX_RETRIES`, and `OPENAI_MAX_OUTPUT_TOKENS` bound provider latency, retry amplification, and response cost.

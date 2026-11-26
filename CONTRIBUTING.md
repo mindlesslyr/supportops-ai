@@ -27,6 +27,11 @@ python -m json.tool n8n/supportops-workflow.json >/dev/null
 docker compose config -q
 ```
 
+To reproduce document-ingestion retry behavior locally, send the same request twice with
+the same `Idempotency-Key` and verify that both responses contain the same document ID and
+`GET /documents` still contains one row. Then change the payload while keeping the key and
+verify that the API returns `409 idempotency_conflict`. Use disposable keys and test data.
+
 ## Change workflow
 
 1. Search existing issues before creating a new one.
