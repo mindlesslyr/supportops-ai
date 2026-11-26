@@ -1,3 +1,5 @@
+import hashlib
+import json
 import uuid
 
 from app.rag.answers import AnswerProvider
@@ -29,12 +31,42 @@ class SupportService:
         self.chunk_size, self.chunk_overlap = chunk_size, chunk_overlap
         self.confidence_threshold = confidence_threshold
 
-    def ingest(self, document: DocumentCreate) -> DocumentRead:
-        doc_id = str(uuid.uuid4())
+    def ingest(self, document: DocumentCreate, idempotency_key: str | None = None) -> DocumentRead:
+        claim = None
+        lease_token = None
+        if idempotency_key:
+            encoded = json.dumps(
+                document.model_dump(mode="json"),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+            claim = self.repository.begin_document_ingestion(
+                idempotency_key,
+                hashlib.sha256(encoded).hexdigest(),
+            )
+            if claim.response is not None:
+                return DocumentRead.model_validate(claim.response)
+            if claim.lease_token is None:
+                raise RuntimeError("Document ingestion claim did not include a lease token")
+            lease_token = claim.lease_token
+        doc_id = claim.document_id if claim else str(uuid.uuid4())
         chunks = chunk_text(document.content.strip(), self.chunk_size, self.chunk_overlap)
         if not chunks:
+            if idempotency_key and lease_token:
+                self.repository.fail_document_ingestion(idempotency_key, lease_token)
             raise IngestionError("zero_chunks", "Document content produced no chunks")
         chunk_ids = self.vectors.chunk_ids(doc_id, len(chunks))
+        if claim and claim.retrying:
+            try:
+                self.vectors.delete_document(doc_id)
+            except Exception as exc:
+                if idempotency_key and lease_token:
+                    self.repository.retry_document_ingestion(idempotency_key, lease_token)
+                raise IngestionError(
+                    "vector_reconciliation_failed",
+                    "Previous document vectors could not be reconciled; retry the request",
+                ) from exc
         try:
             self.vectors.add_chunks(
                 doc_id,
@@ -45,6 +77,19 @@ class SupportService:
                 chunk_ids=chunk_ids,
             )
         except Exception as exc:
+            if idempotency_key and lease_token:
+                retained = self.repository.retry_document_ingestion(
+                    idempotency_key, lease_token
+                )
+                if not retained:
+                    raise IngestionError(
+                        "lost_ingestion_claim",
+                        "Document ingestion claim changed ownership; retry the request",
+                    ) from exc
+                raise IngestionError(
+                    "vector_persistence_failed",
+                    "Vector persistence was uncertain; deterministic point IDs were retained for safe retry",
+                ) from exc
             try:
                 self.vectors.delete_chunks(chunk_ids)
             except Exception as compensation_exc:  # noqa: BLE001
@@ -56,18 +101,59 @@ class SupportService:
                 "vector_persistence_failed",
                 "Vector persistence failed; deterministic point IDs were cleaned up",
             ) from exc
+        response = DocumentRead(
+            id=doc_id,
+            title=document.title,
+            source=document.source,
+            metadata=document.metadata,
+            chunk_count=len(chunks),
+        )
         try:
-            self.repository.add_document(
-                doc_id,
-                document.title,
-                document.source,
-                document.metadata,
-                len(chunks),
-            )
+            if idempotency_key:
+                if lease_token is None:
+                    raise RuntimeError("Document ingestion lease token was lost")
+                committed = self.repository.complete_document_ingestion(
+                    idempotency_key,
+                    lease_token,
+                    doc_id,
+                    document.title,
+                    document.source,
+                    document.metadata,
+                    len(chunks),
+                    response.model_dump(mode="json"),
+                )
+                if not committed:
+                    raise IngestionError(
+                        "lost_ingestion_claim",
+                        "Document ingestion claim changed ownership; retry the request",
+                    )
+            else:
+                self.repository.add_document(
+                    doc_id,
+                    document.title,
+                    document.source,
+                    document.metadata,
+                    len(chunks),
+                )
         except Exception as exc:
+            if isinstance(exc, IngestionError):
+                raise
+            if idempotency_key and lease_token:
+                retained = self.repository.retry_document_ingestion(
+                    idempotency_key, lease_token
+                )
+                if not retained:
+                    raise IngestionError(
+                        "lost_ingestion_claim",
+                        "Document ingestion claim changed ownership; retry the request",
+                    ) from exc
+                raise IngestionError(
+                    "metadata_persistence_failed",
+                    "Metadata persistence failed; deterministic point IDs and the document claim were retained for safe retry",
+                ) from exc
             try:
                 self.vectors.delete_chunks(chunk_ids)
-            except Exception as compensation_exc:  # noqa: BLE001 - preserve both storage failures
+            except Exception as compensation_exc:  # noqa: BLE001 - preserve both failures
                 raise IngestionError(
                     "metadata_persistence_failed_compensation_failed",
                     f"Metadata persistence failed and vector cleanup failed: {compensation_exc}",
@@ -76,13 +162,7 @@ class SupportService:
                 "metadata_persistence_failed",
                 "Metadata persistence failed; inserted vectors were removed",
             ) from exc
-        return DocumentRead(
-            id=doc_id,
-            title=document.title,
-            source=document.source,
-            metadata=document.metadata,
-            chunk_count=len(chunks),
-        )
+        return response
 
     def query(self, question: str, top_k: int) -> QueryResponse:
         question = question.strip()

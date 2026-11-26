@@ -22,6 +22,14 @@ class WebhookClaim:
     response: dict | None = None
 
 
+@dataclass(frozen=True)
+class DocumentIngestionClaim:
+    document_id: str
+    lease_token: str | None = None
+    response: dict | None = None
+    retrying: bool = False
+
+
 class SQLiteRepository:
     def __init__(self, path: str):
         self.path = path
@@ -48,6 +56,7 @@ class SQLiteRepository:
                 """
                 CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY,title TEXT NOT NULL,source TEXT NOT NULL,metadata TEXT NOT NULL,chunk_count INTEGER NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
                 CREATE TABLE IF NOT EXISTS feedback(id INTEGER PRIMARY KEY AUTOINCREMENT,query TEXT NOT NULL,answer TEXT NOT NULL,rating INTEGER NOT NULL,comment TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+                CREATE TABLE IF NOT EXISTS document_ingestions(idempotency_key TEXT PRIMARY KEY,request_digest TEXT NOT NULL,document_id TEXT NOT NULL,response TEXT,status TEXT NOT NULL DEFAULT 'processing',lease_token TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
                 CREATE TABLE IF NOT EXISTS webhook_events(idempotency_key TEXT PRIMARY KEY,ticket_id TEXT NOT NULL,request_digest TEXT,response TEXT,status TEXT NOT NULL DEFAULT 'completed',lease_token TEXT,lease_expires_at REAL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
                 """
             )
@@ -61,6 +70,12 @@ class SQLiteRepository:
             ):
                 if name not in columns:
                     c.execute(f"ALTER TABLE webhook_events ADD COLUMN {name} {definition}")
+            ingestion_columns = {
+                row["name"] for row in c.execute("PRAGMA table_info(document_ingestions)")
+            }
+            for name, definition in (("lease_token", "TEXT"),):
+                if name not in ingestion_columns:
+                    c.execute(f"ALTER TABLE document_ingestions ADD COLUMN {name} {definition}")
 
     def check_ready(self) -> None:
         with self.connection() as c:
@@ -72,6 +87,93 @@ class SQLiteRepository:
                 "INSERT INTO documents(id,title,source,metadata,chunk_count) VALUES(?,?,?,?,?)",
                 (doc_id, title, source, json.dumps(metadata), chunk_count),
             )
+
+    def begin_document_ingestion(
+        self, key: str, request_digest: str
+    ) -> DocumentIngestionClaim:
+        lease_token = str(uuid.uuid4())
+        document_id = str(uuid.uuid4())
+        with self.connection() as c:
+            cursor = c.execute(
+                """INSERT OR IGNORE INTO document_ingestions
+                (idempotency_key,request_digest,document_id,status,lease_token)
+                VALUES(?,?,?,'processing',?)""",
+                (key, request_digest, document_id, lease_token),
+            )
+            if cursor.rowcount == 1:
+                return DocumentIngestionClaim(
+                    document_id=document_id, lease_token=lease_token
+                )
+            row = c.execute(
+                """SELECT request_digest,document_id,response,status
+                FROM document_ingestions WHERE idempotency_key=?""",
+                (key,),
+            ).fetchone()
+            if row["request_digest"] != request_digest:
+                raise IdempotencyConflictError
+            if row["status"] == "completed":
+                return DocumentIngestionClaim(
+                    document_id=row["document_id"], response=json.loads(row["response"])
+                )
+            if row["status"] == "retryable":
+                reclaimed = c.execute(
+                    """UPDATE document_ingestions
+                    SET status='processing',lease_token=?
+                    WHERE idempotency_key=? AND status='retryable' AND request_digest=?""",
+                    (lease_token, key, request_digest),
+                )
+                if reclaimed.rowcount == 1:
+                    return DocumentIngestionClaim(
+                        document_id=row["document_id"],
+                        lease_token=lease_token,
+                        retrying=True,
+                    )
+            raise IdempotencyInProgressError
+
+    def complete_document_ingestion(
+        self,
+        key: str,
+        lease_token: str,
+        doc_id: str,
+        title: str,
+        source: str,
+        metadata: dict,
+        chunk_count: int,
+        response: dict,
+    ) -> bool:
+        with self.connection() as c:
+            completed = c.execute(
+                """UPDATE document_ingestions
+                SET response=?,status='completed',lease_token=NULL
+                WHERE idempotency_key=? AND status='processing' AND lease_token=?""",
+                (json.dumps(response), key, lease_token),
+            )
+            if completed.rowcount != 1:
+                return False
+            c.execute(
+                "INSERT INTO documents(id,title,source,metadata,chunk_count) VALUES(?,?,?,?,?)",
+                (doc_id, title, source, json.dumps(metadata), chunk_count),
+            )
+            return True
+
+    def fail_document_ingestion(self, key: str, lease_token: str) -> bool:
+        with self.connection() as c:
+            cursor = c.execute(
+                """DELETE FROM document_ingestions
+                WHERE idempotency_key=? AND status='processing' AND lease_token=?""",
+                (key, lease_token),
+            )
+            return cursor.rowcount == 1
+
+    def retry_document_ingestion(self, key: str, lease_token: str) -> bool:
+        with self.connection() as c:
+            cursor = c.execute(
+                """UPDATE document_ingestions
+                SET status='retryable',lease_token=NULL
+                WHERE idempotency_key=? AND status='processing' AND lease_token=?""",
+                (key, lease_token),
+            )
+            return cursor.rowcount == 1
 
     def list_documents(self) -> list[dict]:
         with self.connection() as c:

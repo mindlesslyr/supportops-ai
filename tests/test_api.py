@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import sqlite3
 import threading
 import time
 
@@ -76,6 +77,61 @@ def test_ingest_list_query_and_citations(client):
     assert body["citations"][0]["source"] == "kb://password"
     assert body["retrieved_chunks"]
     assert "knowledge base" in body["answer"]
+
+
+def test_document_ingestion_replays_original_response(client):
+    payload = {
+        "title": "Refunds",
+        "content": "Refunds are available within 30 days.",
+        "source": "kb://refunds",
+    }
+    headers = {**API_HEADERS, "Idempotency-Key": "document-refunds-v1"}
+
+    first = client.post("/documents", json=payload, headers=headers)
+    second = client.post("/documents", json=payload, headers=headers)
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert second.json() == first.json()
+    assert len(client.get("/documents", headers=API_HEADERS).json()) == 1
+    assert client.app.state.service.vectors.client.count("test", exact=True).count == first.json()[
+        "chunk_count"
+    ]
+
+
+def test_document_ingestion_rejects_key_reuse_with_different_payload(client):
+    headers = {**API_HEADERS, "Idempotency-Key": "document-policy-v1"}
+    first = client.post(
+        "/documents",
+        json={"title": "Refunds", "content": "Refunds take 5 days."},
+        headers=headers,
+    )
+
+    conflict = client.post(
+        "/documents",
+        json={"title": "Refunds", "content": "Refunds take 10 days."},
+        headers=headers,
+    )
+
+    assert first.status_code == 201
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"] == {
+        "code": "idempotency_conflict",
+        "message": "Idempotency key was used with a different payload",
+    }
+    assert len(client.get("/documents", headers=API_HEADERS).json()) == 1
+
+
+def test_document_ingestion_rejects_blank_idempotency_key(client):
+    response = client.post(
+        "/documents",
+        json={"title": "Refunds", "content": "Refunds take 5 days."},
+        headers={**API_HEADERS, "Idempotency-Key": "   "},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_idempotency_key"
+    assert client.get("/documents", headers=API_HEADERS).json() == []
 
 
 def test_blank_document_and_query_are_rejected(client):
@@ -252,6 +308,25 @@ def test_stale_webhook_worker_cannot_return_uncommitted_response(client, monkeyp
     assert response.json()["detail"]["code"] == "stale_webhook_lease"
 
 
+def test_lost_ingestion_claim_returns_conflict(client, monkeypatch):
+    def lost_claim(*args, **kwargs):
+        raise IngestionError(
+            "lost_ingestion_claim",
+            "Document ingestion claim changed ownership; retry the request",
+        )
+
+    monkeypatch.setattr(client.app.state.service, "ingest", lost_claim)
+
+    response = client.post(
+        "/documents",
+        json={"title": "Refunds", "content": "Refunds take five days."},
+        headers={**API_HEADERS, "Idempotency-Key": "refund-policy-v1"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "lost_ingestion_claim"
+
+
 def test_webhook_hmac_auth(tmp_path):
     app = create_app(
         Settings(
@@ -345,6 +420,31 @@ def test_idempotency_claim_is_atomic_under_concurrency(tmp_path):
     assert sum(outcome != "in_progress" for outcome in outcomes) == 1
 
 
+def test_document_ingestion_claim_is_atomic_under_concurrency(tmp_path):
+    repository = SQLiteRepository(str(tmp_path / "db.sqlite"))
+    barrier = threading.Barrier(8)
+    outcomes = []
+    errors = []
+
+    def claim():
+        try:
+            barrier.wait()
+            outcomes.append(repository.begin_document_ingestion("same", "digest"))
+        except IdempotencyInProgressError:
+            outcomes.append("in_progress")
+        except Exception as exc:  # noqa: BLE001 - collect unexpected thread failures
+            errors.append(exc)
+
+    threads = [threading.Thread(target=claim) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors
+    assert sum(outcome != "in_progress" for outcome in outcomes) == 1
+
+
 def test_stale_webhook_lease_is_reclaimed_without_old_worker_overwrite(tmp_path):
     repository = SQLiteRepository(str(tmp_path / "db.sqlite"))
     first = repository.begin_webhook("key", "T", "digest", 0.01)
@@ -357,6 +457,51 @@ def test_stale_webhook_lease_is_reclaimed_without_old_worker_overwrite(tmp_path)
     assert repository.complete_webhook("key", second.lease_token, {"status": "new"}) is True
     replay = repository.begin_webhook("key", "T", "digest", 30)
     assert replay.response == {"status": "new"}
+
+
+def test_processing_ingestion_claim_is_not_reclaimed_by_time(tmp_path):
+    repository = SQLiteRepository(str(tmp_path / "db.sqlite"))
+    first = repository.begin_document_ingestion("key", "digest")
+    time.sleep(0.02)
+    assert first.lease_token is not None
+    with pytest.raises(IdempotencyInProgressError):
+        repository.begin_document_ingestion("key", "digest")
+
+
+def test_intermediate_ingestion_schema_preserves_completed_claim(tmp_path):
+    path = tmp_path / "db.sqlite"
+    response = {
+        "id": "document-id",
+        "title": "Refunds",
+        "source": "manual",
+        "metadata": {},
+        "chunk_count": 1,
+    }
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """CREATE TABLE document_ingestions(
+            idempotency_key TEXT PRIMARY KEY,
+            request_digest TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            response TEXT,
+            status TEXT NOT NULL DEFAULT 'processing',
+            lease_token TEXT,
+            lease_expires_at REAL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        connection.execute(
+            """INSERT INTO document_ingestions
+            (idempotency_key,request_digest,document_id,response,status)
+            VALUES(?,?,?,?, 'completed')""",
+            ("refund-policy-v1", "digest", "document-id", json.dumps(response)),
+        )
+
+    repository = SQLiteRepository(str(path))
+    replay = repository.begin_document_ingestion("refund-policy-v1", "digest")
+
+    assert replay.response == response
+    assert replay.document_id == "document-id"
 
 
 def test_production_disables_docs(tmp_path):
