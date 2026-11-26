@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import sqlite3
 import threading
 import time
 
@@ -307,14 +308,14 @@ def test_stale_webhook_worker_cannot_return_uncommitted_response(client, monkeyp
     assert response.json()["detail"]["code"] == "stale_webhook_lease"
 
 
-def test_stale_ingestion_worker_returns_conflict(client, monkeypatch):
-    def stale_ingest(*args, **kwargs):
+def test_lost_ingestion_claim_returns_conflict(client, monkeypatch):
+    def lost_claim(*args, **kwargs):
         raise IngestionError(
-            "stale_ingestion_lease",
-            "Document ingestion lease expired; retry the request",
+            "lost_ingestion_claim",
+            "Document ingestion claim changed ownership; retry the request",
         )
 
-    monkeypatch.setattr(client.app.state.service, "ingest", stale_ingest)
+    monkeypatch.setattr(client.app.state.service, "ingest", lost_claim)
 
     response = client.post(
         "/documents",
@@ -323,7 +324,7 @@ def test_stale_ingestion_worker_returns_conflict(client, monkeypatch):
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "stale_ingestion_lease"
+    assert response.json()["detail"]["code"] == "lost_ingestion_claim"
 
 
 def test_webhook_hmac_auth(tmp_path):
@@ -465,6 +466,42 @@ def test_processing_ingestion_claim_is_not_reclaimed_by_time(tmp_path):
     assert first.lease_token is not None
     with pytest.raises(IdempotencyInProgressError):
         repository.begin_document_ingestion("key", "digest")
+
+
+def test_intermediate_ingestion_schema_preserves_completed_claim(tmp_path):
+    path = tmp_path / "db.sqlite"
+    response = {
+        "id": "document-id",
+        "title": "Refunds",
+        "source": "manual",
+        "metadata": {},
+        "chunk_count": 1,
+    }
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """CREATE TABLE document_ingestions(
+            idempotency_key TEXT PRIMARY KEY,
+            request_digest TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            response TEXT,
+            status TEXT NOT NULL DEFAULT 'processing',
+            lease_token TEXT,
+            lease_expires_at REAL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        connection.execute(
+            """INSERT INTO document_ingestions
+            (idempotency_key,request_digest,document_id,response,status)
+            VALUES(?,?,?,?, 'completed')""",
+            ("refund-policy-v1", "digest", "document-id", json.dumps(response)),
+        )
+
+    repository = SQLiteRepository(str(path))
+    replay = repository.begin_document_ingestion("refund-policy-v1", "digest")
+
+    assert replay.response == response
+    assert replay.document_id == "document-id"
 
 
 def test_production_disables_docs(tmp_path):

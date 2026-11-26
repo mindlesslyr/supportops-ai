@@ -169,7 +169,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from fastapi.responses import JSONResponse
 
         return JSONResponse(
-            status_code=409 if exc.code == "stale_ingestion_lease" else 500,
+            status_code=409 if exc.code == "lost_ingestion_claim" else 500,
             content={"detail": {"code": exc.code, "message": str(exc)}},
         )
 

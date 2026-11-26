@@ -83,8 +83,8 @@ class SupportService:
                 )
                 if not retained:
                     raise IngestionError(
-                        "stale_ingestion_lease",
-                        "Document ingestion lease expired; retry the request",
+                        "lost_ingestion_claim",
+                        "Document ingestion claim changed ownership; retry the request",
                     ) from exc
                 raise IngestionError(
                     "vector_persistence_failed",
@@ -124,8 +124,8 @@ class SupportService:
                 )
                 if not committed:
                     raise IngestionError(
-                        "stale_ingestion_lease",
-                        "Document ingestion lease expired; retry the request",
+                        "lost_ingestion_claim",
+                        "Document ingestion claim changed ownership; retry the request",
                     )
             else:
                 self.repository.add_document(
@@ -144,8 +144,8 @@ class SupportService:
                 )
                 if not retained:
                     raise IngestionError(
-                        "stale_ingestion_lease",
-                        "Document ingestion lease expired; retry the request",
+                        "lost_ingestion_claim",
+                        "Document ingestion claim changed ownership; retry the request",
                     ) from exc
                 raise IngestionError(
                     "metadata_persistence_failed",
