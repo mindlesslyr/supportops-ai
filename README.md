@@ -103,6 +103,23 @@ docker compose exec n8n n8n import:workflow \
 
 Open **SupportOps AI - Support Webhook** in n8n, review its nodes, and activate it. The public n8n webhook requires both `X-SupportOps-Inbound-Token` and `Idempotency-Key`; retries must reuse the same idempotency key.
 
+### Disposable n8n contract test
+
+Run the opt-in integration test with one command:
+
+```bash
+./scripts/run-n8n-contract-test.sh
+```
+
+The script starts an isolated Compose project on ports `18000`, `16333`, and `15678`, imports and publishes the versioned workflow, waits for the production webhook to register, and verifies:
+
+- the happy path travels through n8n and reaches the API;
+- replaying the same idempotency key returns the same response;
+- missing inbound tokens and idempotency keys fail;
+- a body changed after signing is rejected by the API.
+
+It uses disposable placeholder secrets and removes its containers and volumes when finished. Set `KEEP_CONTRACT_STACK=1` to retain the isolated stack after a failed run. The normal pytest suite skips this integration module unless `RUN_N8N_CONTRACT=1` is set.
+
 Development ports are bound only to `127.0.0.1`: API 8000, Qdrant 6333, and n8n 5678. Compose refuses to start without API, webhook, inbound n8n, database, and n8n encryption secrets. Healthchecks and dependency conditions make Qdrant/Postgres/API startup ordered. The imported `n8n/supportops-workflow.json` first requires `X-SupportOps-Inbound-Token`, then signs the exact forwarded body and sends the API key. The inbound token is independent from the API key and webhook-signing secret.
 
 `N8N_SECURE_COOKIE=false` is explicit because this development stack uses localhost HTTP. **Production must use TLS and set secure cookies true**, avoid publishing Qdrant/Postgres, place the API behind an authenticated reverse proxy/firewall, rotate high-entropy secrets, restrict n8n access, configure backups and audit logging, and apply rate/body-size limits. Do not expose this development compose file directly to the internet.
